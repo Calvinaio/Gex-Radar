@@ -74,7 +74,7 @@ with st.sidebar:
     st.header("⚙️ 參數設定")
     ticker_input = st.text_input(
         "輸入股票代碼 (以逗號分隔)：", 
-        "SPY, QQQ, IWM, DIA, SOXX, TSLA, NVDA, AAPL, MSFT, AMD, META, AMZN, GOOGL, AVGO"
+        "SPY, QQQ, IWM, DIA, SOXX, TSLA, NVDA, AAPL, MSFT, AMD, META, AMZN, GOOGL, AVGO, MU, TSM"
     )
     days_input = st.slider("分析未來幾天內到期的期權？", min_value=1, max_value=365, value=60)
     range_input = st.slider("履約價掃描範圍 (上下 %)", min_value=5, max_value=50, value=15, step=5)
@@ -349,3 +349,4 @@ if run_button:
                         
                 except Exception as e:
                     st.error(f"計算 {ticker} 時發生錯誤: {e}")
+
