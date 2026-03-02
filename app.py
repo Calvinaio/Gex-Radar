@@ -10,11 +10,10 @@ import json
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- Google Sheets 連線設定 ---
+# --- 1. Google Sheets 連線設定 ---
 @st.cache_resource
 def get_gspread_client():
     try:
-        # 從 Streamlit 保險箱讀取我們剛剛貼上的 JSON 金鑰
         creds_json = st.secrets["GOOGLE_CREDENTIALS"]
         creds_dict = json.loads(creds_json)
         scopes = [
@@ -27,8 +26,9 @@ def get_gspread_client():
     except Exception as e:
         st.error(f"Google 金鑰讀取失敗，請檢查 Secrets 設定。錯誤: {e}")
         return None
-        
-@st.cache_data(ttl=3600)  # 快取 1 小時，避免頻繁讀取被對方伺服器封鎖
+
+# --- 2. SqueezeMetrics 數據抓取 ---
+@st.cache_data(ttl=3600)
 def fetch_squeezemetrics_data():
     try:
         url = "https://squeezemetrics.com/monitor/static/DIX.csv"
@@ -38,8 +38,8 @@ def fetch_squeezemetrics_data():
         return df
     except Exception as e:
         return None
-        
-# --- 核心運算函數 ---
+
+# --- 3. 核心運算函數 ---
 def calc_gamma(S, K, T, r, sigma):
     if T <= 0 or sigma <= 0.01:
         return 0.0
@@ -64,34 +64,34 @@ def is_near_opex(date_obj):
             return True
     return False
 
-# --- 網頁介面設定 ---
+# --- 4. 網頁介面設定 ---
 st.set_page_config(page_title="GEX 專業分析儀表板", layout="wide")
 st.title("📈 終極版 GEX 雲端籌碼雷達")
-st.markdown("結合 **策略提示** 與 **Google 試算表雲端資料庫**，歷史數據永不遺失。")
+st.markdown("結合 **SqueezeMetrics 大盤數據**、**個股策略提示** 與 **Google 試算表自動存檔**。")
 
-# --- 側邊欄與輸入區 ---
+# --- 5. 側邊欄與輸入區 ---
 with st.sidebar:
     st.header("⚙️ 參數設定")
-    ticker_input = st.text_input("輸入股票代碼 (以逗號分隔)：", "SPY, QQQ, IWM, DIA, SOXX, TSLA, NVDA, AAPL, MSFT, AMD, META, AMZN, GOOGL, AVGO, MU, TSM")
+    ticker_input = st.text_input(
+        "輸入股票代碼 (以逗號分隔)：", 
+        "SPY, QQQ, IWM, DIA, SOXX, TSLA, NVDA, AAPL, MSFT, AMD, META, AMZN, GOOGL, AVGO"
+    )
     days_input = st.slider("分析未來幾天內到期的期權？", min_value=1, max_value=365, value=60)
     range_input = st.slider("履約價掃描範圍 (上下 %)", min_value=5, max_value=50, value=15, step=5)
     risk_free_rate = st.number_input("無風險利率設定 (%)", value=4.0) / 100.0
     run_button = st.button("🚀 開始掃描籌碼與策略", use_container_width=True)
 
-# --- 主程式邏輯 ---
+# --- 6. 主程式邏輯 ---
 if run_button:
     tickers = [t.strip().upper() for t in ticker_input.split(",")]
     
     if not tickers or tickers == [""]:
         st.warning("請輸入至少一個股票代碼！")
     else:
-        current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         today_date_str = datetime.datetime.now().strftime("%Y-%m-%d")
         gs_client = get_gspread_client()
         
-        # ---------------------------------------------------------
-        # 🌐 新增：大盤總體環境 (SqueezeMetrics 官方數據)
-        # ---------------------------------------------------------
+        # --- 6.1 大盤總體環境 (SqueezeMetrics) ---
         with st.spinner("正在獲取 SqueezeMetrics 大盤暗池與 GEX 數據..."):
             sm_df = fetch_squeezemetrics_data()
             if sm_df is not None and not sm_df.empty:
@@ -101,41 +101,38 @@ if run_button:
                 st.markdown("## 🌐 標普 500 大盤總體環境 (SqueezeMetrics)")
                 st.caption(f"📅 官方數據更新日期: {latest['date'].strftime('%Y-%m-%d')} (通常為前一交易日收盤後)")
                 
-                sm_gex_latest = latest['gex'] / 1e9  # 轉換為十億 (Billions)
+                # 計算數值
+                sm_gex_latest = latest['gex'] / 1e9  # 十億 (B)
                 sm_gex_prev = prev['gex'] / 1e9
                 sm_dix_latest = latest['dix'] * 100
                 sm_dix_prev = prev['dix'] * 100
                 
                 col_sm1, col_sm2, col_sm3 = st.columns(3)
                 
-                # 大盤 GEX 指標
+                # GEX 指標
                 gex_status = "🟢 穩定護盤期" if sm_gex_latest > 0 else "🔴 高波動狂暴期"
                 col_sm1.metric("SPX 官方總體 GEX", f"{sm_gex_latest:.2f} B", f"{sm_gex_latest - sm_gex_prev:.2f} B", delta_color="normal" if sm_gex_latest > 0 else "inverse")
                 
-                # 暗池 DIX 指標
-                if sm_dix_latest >= 45.0: dix_status = "🔥 極度貪婪 (法人瘋狂接刀)"
-                elif sm_dix_latest <= 35.0: dix_status = "❄️ 極度冷清 (法人高歌離席)"
+                # DIX 指標
+                if sm_dix_latest >= 45.0: dix_status = "🔥 極度貪婪 (法人接刀)"
+                elif sm_dix_latest <= 35.0: dix_status = "❄️ 極度冷清 (法人離席)"
                 else: dix_status = "⚪ 中性水準"
-                col_sm2.metric("暗池指數 (DIX)", f"{sm_dix_latest:.1f}%", f"{sm_dix_latest - sm_dix_prev:.1f}%")
+                col_sm2.metric(f"暗池指數 (DIX) - {dix_status}", f"{sm_dix_latest:.1f}%", f"{sm_dix_latest - sm_dix_prev:.1f}%")
                 
-                # 大盤策略判定
-                strat_text = "觀望 / 順勢"
+                # 策略判定
                 if sm_gex_latest < 0 and sm_dix_latest >= 45.0:
-                    strat_text = "🎯 狙擊期 (2倍/3倍做多)"
-                    col_sm3.error(f"**大盤策略**: {strat_text}\n\n(恐慌殺盤中法人爆買，準備 V 轉)")
+                    col_sm3.error("**大盤策略**: 🎯 狙擊期 (2倍做多)\n\n(恐慌殺盤中法人爆買，準備 V 轉)")
                 elif sm_gex_latest > 0:
-                    strat_text = "🛡️ 平穩期 (1倍/2倍做多)"
-                    col_sm3.success(f"**大盤策略**: {strat_text}\n\n(莊家護盤中，拉回找買點)")
+                    col_sm3.success("**大盤策略**: 🛡️ 平穩期 (1倍/2倍做多)\n\n(莊家護盤中，拉回找買點)")
                 else:
-                    strat_text = "🌪️ 風暴期 (空手抱現金)"
-                    col_sm3.warning(f"**大盤策略**: {strat_text}\n\n(負伽馬且法人未接刀，極度危險)")
-                
+                    col_sm3.warning("**大盤策略**: 🌪️ 風暴期 (空手抱現金)\n\n(負伽馬且法人未接刀，極度危險)")
             else:
                 st.warning("無法取得 SqueezeMetrics 數據，請稍後再試。")
-        
+                
+        # --- 6.2 個股迴圈掃描 ---
         for ticker in tickers:
             st.markdown("---")
-            st.subheader(f"🎯 {ticker} 籌碼觀測站")
+            st.subheader(f"🎯 {ticker} 個股籌碼觀測站")
             
             with st.spinner(f"正在掃描 {ticker} 的選擇權數據並計算..."):
                 try:
@@ -186,6 +183,7 @@ if run_button:
                             gex_data.append({'Strike': row['strike'], 'GEX': gex, 'Type': 'Put', 'Bucket': bucket})
                             
                     if not gex_data:
+                        st.warning(f"{ticker} 範圍內無有效的 GEX 數據。")
                         continue
                     
                     total_oi = total_call_oi + total_put_oi
@@ -200,8 +198,14 @@ if run_button:
                     
                     df_total_by_strike = df_filtered.groupby('Strike')['GEX'].sum().reset_index().sort_values(by='Strike')
                     total_gex = df_total_by_strike['GEX'].sum() / 1e6
-                    max_call_wall = df_total_by_strike[df_total_by_strike['GEX'] > 0].loc[df_total_by_strike['GEX'].idxmax()]['Strike'] if not df_total_by_strike[df_total_by_strike['GEX'] > 0].empty else 0
-                    max_put_wall = df_total_by_strike[df_total_by_strike['GEX'] < 0].loc[df_total_by_strike['GEX'].idxmin()]['Strike'] if not df_total_by_strike[df_total_by_strike['GEX'] < 0].empty else 0
+                    
+                    max_call_wall = 0
+                    if not df_total_by_strike[df_total_by_strike['GEX'] > 0].empty:
+                        max_call_wall = df_total_by_strike[df_total_by_strike['GEX'] > 0].loc[df_total_by_strike['GEX'].idxmax()]['Strike']
+                        
+                    max_put_wall = 0
+                    if not df_total_by_strike[df_total_by_strike['GEX'] < 0].empty:
+                        max_put_wall = df_total_by_strike[df_total_by_strike['GEX'] < 0].loc[df_total_by_strike['GEX'].idxmin()]['Strike']
                     
                     zero_gamma_level = 0
                     closest_distance = float('inf')
@@ -215,9 +219,7 @@ if run_button:
                     
                     zg_display = f"${zero_gamma_level:.2f}" if zero_gamma_level > 0 else "無明顯交界"
 
-                    # ---------------------------------------------------------
-                    # ☁️ 雲端寫入 Google Sheets 邏輯
-                    # ---------------------------------------------------------
+                    # --- 雲端寫入 Google Sheets 邏輯 ---
                     new_data = {
                         "Date": today_date_str,
                         "Spot Price": round(spot_price, 2),
@@ -231,29 +233,23 @@ if run_button:
 
                     if gs_client:
                         try:
-                            # 開啟試算表
                             sheet = gs_client.open("GEX_History")
-                            
-                            # 尋找或建立該股票的專屬分頁
                             try:
                                 worksheet = sheet.worksheet(ticker)
                             except gspread.WorksheetNotFound:
                                 worksheet = sheet.add_worksheet(title=ticker, rows="1000", cols="10")
-                                worksheet.append_row(list(new_data.keys())) # 寫入標題
+                                worksheet.append_row(list(new_data.keys()))
                             
-                            # 讀取現有歷史紀錄
                             records = worksheet.get_all_records()
                             if records:
                                 history_df = pd.DataFrame(records)
                                 history_df['Date'] = history_df['Date'].astype(str)
                                 
-                                # 檢查今天是否已經計算過，避免重複塞入資料
                                 if today_date_str in history_df['Date'].values:
                                     history_df.loc[history_df['Date'] == today_date_str, list(new_data.keys())] = list(new_data.values())
                                 else:
                                     history_df = pd.concat([history_df, pd.DataFrame([new_data])], ignore_index=True)
                             
-                            # 將更新後的資料寫回 Google 表單
                             worksheet.clear()
                             worksheet.update([history_df.columns.values.tolist()] + history_df.values.tolist())
                             st.toast(f'✅ {ticker} 歷史數據已同步至 Google 雲端！', icon='☁️')
@@ -261,9 +257,7 @@ if run_button:
                         except Exception as e:
                             st.error(f"寫入 Google 試算表時發生錯誤: {e}")
 
-                    # ---------------------------------------------------------
-                    # 🤖 AI 策略雷達 & 流動性防呆機制
-                    # ---------------------------------------------------------
+                    # --- AI 策略雷達 & 流動性防呆機制 ---
                     alerts = []
                     threshold = 0.015
                     
@@ -355,6 +349,3 @@ if run_button:
                         
                 except Exception as e:
                     st.error(f"計算 {ticker} 時發生錯誤: {e}")
-
-
-
