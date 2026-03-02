@@ -27,7 +27,18 @@ def get_gspread_client():
     except Exception as e:
         st.error(f"Google 金鑰讀取失敗，請檢查 Secrets 設定。錯誤: {e}")
         return None
-
+        
+@st.cache_data(ttl=3600)  # 快取 1 小時，避免頻繁讀取被對方伺服器封鎖
+def fetch_squeezemetrics_data():
+    try:
+        url = "https://squeezemetrics.com/monitor/static/DIX.csv"
+        df = pd.read_csv(url)
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date').reset_index(drop=True)
+        return df
+    except Exception as e:
+        return None
+        
 # --- 核心運算函數 ---
 def calc_gamma(S, K, T, r, sigma):
     if T <= 0 or sigma <= 0.01:
@@ -77,6 +88,50 @@ if run_button:
         current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         today_date_str = datetime.datetime.now().strftime("%Y-%m-%d")
         gs_client = get_gspread_client()
+        
+        # ---------------------------------------------------------
+        # 🌐 新增：大盤總體環境 (SqueezeMetrics 官方數據)
+        # ---------------------------------------------------------
+        with st.spinner("正在獲取 SqueezeMetrics 大盤暗池與 GEX 數據..."):
+            sm_df = fetch_squeezemetrics_data()
+            if sm_df is not None and not sm_df.empty:
+                latest = sm_df.iloc[-1]
+                prev = sm_df.iloc[-2]
+                
+                st.markdown("## 🌐 標普 500 大盤總體環境 (SqueezeMetrics)")
+                st.caption(f"📅 官方數據更新日期: {latest['date'].strftime('%Y-%m-%d')} (通常為前一交易日收盤後)")
+                
+                sm_gex_latest = latest['gex'] / 1e9  # 轉換為十億 (Billions)
+                sm_gex_prev = prev['gex'] / 1e9
+                sm_dix_latest = latest['dix'] * 100
+                sm_dix_prev = prev['dix'] * 100
+                
+                col_sm1, col_sm2, col_sm3 = st.columns(3)
+                
+                # 大盤 GEX 指標
+                gex_status = "🟢 穩定護盤期" if sm_gex_latest > 0 else "🔴 高波動狂暴期"
+                col_sm1.metric("SPX 官方總體 GEX", f"{sm_gex_latest:.2f} B", f"{sm_gex_latest - sm_gex_prev:.2f} B", delta_color="normal" if sm_gex_latest > 0 else "inverse")
+                
+                # 暗池 DIX 指標
+                if sm_dix_latest >= 45.0: dix_status = "🔥 極度貪婪 (法人瘋狂接刀)"
+                elif sm_dix_latest <= 35.0: dix_status = "❄️ 極度冷清 (法人高歌離席)"
+                else: dix_status = "⚪ 中性水準"
+                col_sm2.metric("暗池指數 (DIX)", f"{sm_dix_latest:.1f}%", f"{sm_dix_latest - sm_dix_prev:.1f}%")
+                
+                # 大盤策略判定
+                strat_text = "觀望 / 順勢"
+                if sm_gex_latest < 0 and sm_dix_latest >= 45.0:
+                    strat_text = "🎯 狙擊期 (2倍/3倍做多)"
+                    col_sm3.error(f"**大盤策略**: {strat_text}\n\n(恐慌殺盤中法人爆買，準備 V 轉)")
+                elif sm_gex_latest > 0:
+                    strat_text = "🛡️ 平穩期 (1倍/2倍做多)"
+                    col_sm3.success(f"**大盤策略**: {strat_text}\n\n(莊家護盤中，拉回找買點)")
+                else:
+                    strat_text = "🌪️ 風暴期 (空手抱現金)"
+                    col_sm3.warning(f"**大盤策略**: {strat_text}\n\n(負伽馬且法人未接刀，極度危險)")
+                
+            else:
+                st.warning("無法取得 SqueezeMetrics 數據，請稍後再試。")
         
         for ticker in tickers:
             st.markdown("---")
@@ -300,5 +355,6 @@ if run_button:
                         
                 except Exception as e:
                     st.error(f"計算 {ticker} 時發生錯誤: {e}")
+
 
 
