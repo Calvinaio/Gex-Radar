@@ -92,40 +92,50 @@ if run_button:
         gs_client = get_gspread_client()
         
         # --- 6.1 大盤總體環境 (SqueezeMetrics) ---
+        sm_gex_ma5_latest = 0  # 預設值防呆
         with st.spinner("正在獲取 SqueezeMetrics 大盤暗池與 GEX 數據..."):
             sm_df = fetch_squeezemetrics_data()
             if sm_df is not None and not sm_df.empty:
+                # 計算 GEX 的 5 日移動平均
+                sm_df['gex_ma5'] = sm_df['gex'].rolling(window=5).mean()
+                
                 latest = sm_df.iloc[-1]
                 prev = sm_df.iloc[-2]
                 
                 st.markdown("## 🌐 標普 500 大盤總體環境 (SqueezeMetrics)")
                 st.caption(f"📅 官方數據更新日期: {latest['date'].strftime('%Y-%m-%d')} (通常為前一交易日收盤後)")
                 
-                # 計算數值
-                sm_gex_latest = latest['gex'] / 1e9  # 十億 (B)
+                # 計算數值 (除以 1e9 轉成十億 B 單位)
+                sm_gex_latest = latest['gex'] / 1e9  
                 sm_gex_prev = prev['gex'] / 1e9
+                sm_gex_ma5_latest = latest['gex_ma5'] / 1e9  # 取得最新 5MA
                 sm_dix_latest = latest['dix'] * 100
                 sm_dix_prev = prev['dix'] * 100
                 
-                col_sm1, col_sm2, col_sm3 = st.columns(3)
+                # 畫面切為 4 欄以容納 5MA 指標
+                col_sm1, col_sm2, col_sm3, col_sm4 = st.columns(4)
                 
                 # GEX 指標
                 gex_status = "🟢 穩定護盤期" if sm_gex_latest > 0 else "🔴 高波動狂暴期"
                 col_sm1.metric("SPX 官方總體 GEX", f"{sm_gex_latest:.2f} B", f"{sm_gex_latest - sm_gex_prev:.2f} B", delta_color="normal" if sm_gex_latest > 0 else "inverse")
                 
+                # GEX 5MA 指標
+                ma5_status = "📈 趨勢偏多" if sm_gex_ma5_latest > 0 else "📉 趨勢偏空"
+                col_sm2.metric("GEX 5日均線 (趨勢)", f"{sm_gex_ma5_latest:.2f} B", ma5_status, delta_color="off")
+                
                 # DIX 指標
                 if sm_dix_latest >= 45.0: dix_status = "🔥 極度貪婪 (法人接刀)"
                 elif sm_dix_latest <= 35.0: dix_status = "❄️ 極度冷清 (法人離席)"
                 else: dix_status = "⚪ 中性水準"
-                col_sm2.metric(f"暗池指數 (DIX) - {dix_status}", f"{sm_dix_latest:.1f}%", f"{sm_dix_latest - sm_dix_prev:.1f}%")
+                col_sm3.metric(f"暗池指數 (DIX) - {dix_status}", f"{sm_dix_latest:.1f}%", f"{sm_dix_latest - sm_dix_prev:.1f}%")
                 
                 # 策略判定
                 if sm_gex_latest < 0 and sm_dix_latest >= 45.0:
-                    col_sm3.error("**大盤策略**: 🎯 狙擊期 (2倍做多)\n\n(恐慌殺盤中法人爆買，準備 V 轉)")
+                    col_sm4.error("**大盤策略**: 🎯 狙擊期 (2倍做多)\n\n(恐慌殺盤中法人爆買，準備 V 轉)")
                 elif sm_gex_latest > 0:
-                    col_sm3.success("**大盤策略**: 🛡️ 平穩期 (1倍/2倍做多)\n\n(莊家護盤中，拉回找買點)")
+                    col_sm4.success("**大盤策略**: 🛡️ 平穩期 (1倍/2倍做多)\n\n(莊家護盤中，拉回找買點)")
                 else:
-                    col_sm3.warning("**大盤策略**: 🌪️ 風暴期 (空手抱現金)\n\n(負伽馬且法人未接刀，極度危險)")
+                    col_sm4.warning("**大盤策略**: 🌪️ 風暴期 (空手抱現金)\n\n(負伽馬且法人未接刀，極度危險)")
             else:
                 st.warning("無法取得 SqueezeMetrics 數據，請稍後再試。")
                 
@@ -227,7 +237,8 @@ if run_button:
                         "P/C Ratio": round(pcr, 2),
                         "Zero Gamma": round(zero_gamma_level, 2),
                         "Call Wall": max_call_wall,
-                        "Put Wall": max_put_wall
+                        "Put Wall": max_put_wall,
+                        "SM GEX 5MA (B)": round(sm_gex_ma5_latest, 2)  # 新增 5MA 欄位
                     }
                     history_df = pd.DataFrame([new_data])
 
@@ -349,4 +360,3 @@ if run_button:
                         
                 except Exception as e:
                     st.error(f"計算 {ticker} 時發生錯誤: {e}")
-
