@@ -229,7 +229,7 @@ if run_button:
                     
                     zg_display = f"${zero_gamma_level:.2f}" if zero_gamma_level > 0 else "無明顯交界"
 
-                    # --- 雲端寫入 Google Sheets 邏輯 ---
+                 # --- 雲端寫入 Google Sheets 邏輯 ---
                     new_data = {
                         "Date": today_date_str,
                         "Spot Price": round(spot_price, 2),
@@ -240,7 +240,6 @@ if run_button:
                         "Put Wall": max_put_wall,
                         "SM GEX 5MA (B)": round(sm_gex_ma5_latest, 2)  # 新增 5MA 欄位
                     }
-                    history_df = pd.DataFrame([new_data])
 
                     if gs_client:
                         try:
@@ -252,15 +251,28 @@ if run_button:
                                 worksheet.append_row(list(new_data.keys()))
                             
                             records = worksheet.get_all_records()
-                            if records:
-                                history_df = pd.DataFrame(records)
-                                history_df['Date'] = history_df['Date'].astype(str)
-                                
-                                if today_date_str in history_df['Date'].values:
-                                    history_df.loc[history_df['Date'] == today_date_str, list(new_data.keys())] = list(new_data.values())
-                                else:
-                                    history_df = pd.concat([history_df, pd.DataFrame([new_data])], ignore_index=True)
+                            history_df = pd.DataFrame([new_data])
                             
+                            if records:
+                                old_df = pd.DataFrame(records)
+                                old_df['Date'] = old_df['Date'].astype(str)
+                                
+                                # 1. 確保舊資料也有新欄位，避免 Pandas 合併時報錯
+                                for key in new_data.keys():
+                                    if key not in old_df.columns:
+                                        old_df[key] = ""
+                                
+                                # 2. 更新今天或附加今天
+                                if today_date_str in old_df['Date'].values:
+                                    old_df.loc[old_df['Date'] == today_date_str, list(new_data.keys())] = list(new_data.values())
+                                    history_df = old_df
+                                else:
+                                    history_df = pd.concat([old_df, pd.DataFrame([new_data])], ignore_index=True)
+                            
+                            # 3. 【致命錯誤修復】將 DataFrame 中的 NaN 轉換為空字串
+                            history_df = history_df.fillna("")
+                            
+                            # 4. 寫入雲端
                             worksheet.clear()
                             worksheet.update([history_df.columns.values.tolist()] + history_df.values.tolist())
                             st.toast(f'✅ {ticker} 歷史數據已同步至 Google 雲端！', icon='☁️')
@@ -360,3 +372,4 @@ if run_button:
                         
                 except Exception as e:
                     st.error(f"計算 {ticker} 時發生錯誤: {e}")
+
