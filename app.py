@@ -280,26 +280,41 @@ if run_button:
                         except Exception as e:
                             st.error(f"寫入 Google 試算表時發生錯誤: {e}")
 
-                    # --- AI 策略雷達 & 流動性防呆機制 ---
+                  # --- AI 策略雷達：動態調整版本 ---
                     alerts = []
-                    threshold = 0.015
+                    near_wall_threshold = 0.015  # 警報觸發距離 (1.5%)
+                    ceiling_buffer_threshold = 0.02 # 天花板減速距離 (2%)
                     
                     if total_oi < 50000:
-                        alerts.append(("🛑 嚴重警告：期權流動性不足", f"此標的期權總未平倉量僅 **{int(total_oi):,} 口**。流動性過低，GEX 支撐壓力無效，請改用技術面分析！", "error"))
+                        alerts.append(("🛑 嚴重警告：期權流動性不足", f"此標的期權總未平倉量過低。GEX 支撐壓力無效！", "error"))
                     else:
-                        if is_near_opex(today):
-                            alerts.append(("📅 策略五：OpEx 結算日變盤警告", "目前正值選擇權大結算前後！大量 Gamma 即將蒸發，請密切留意結算後是否出現單邊突破行情。", "warning"))
-                        if zero_gamma_level > 0 and abs(spot_price - zero_gamma_level) / spot_price <= threshold:
-                            alerts.append(("⚡ 策略四：Zero Gamma 多空決戰點", f"當前股價處於多空分水嶺 (${zero_gamma_level:.2f}) 邊緣！若帶量跌破適合做空，強勢站穩適合做多。", "info"))
-                        if max_put_wall > 0 and abs(spot_price - max_put_wall) / spot_price <= threshold:
-                            alerts.append(("🔥 策略二：Put Wall 極限支撐", f"股價極度逼近最大下檔支撐牆 (${max_put_wall})！這是一個極佳的反轉買點。", "success"))
-                        if max_call_wall > 0 and abs(spot_price - max_call_wall) / spot_price <= threshold:
-                            alerts.append(("⚠️ 策略三：Call Wall 泰山壓頂", f"股價極度逼近最大上檔壓力牆 (${max_call_wall})！多單請考慮獲利了結或尋找放空時機。", "warning"))
-                        if total_gex > 0 and not (abs(spot_price - max_put_wall) / spot_price <= threshold) and not (abs(spot_price - max_call_wall) / spot_price <= threshold):
-                            alerts.append(("💡 策略一：正 GEX 區間震盪", f"目前整體市場 GEX 為正 ({total_gex:.2f} M)，最佳策略是高拋低吸。", "success"))
-                        elif total_gex < 0 and not (abs(spot_price - zero_gamma_level) / spot_price <= threshold):
-                            alerts.append(("🚨 警告：負 GEX 狂暴模式", f"目前整體市場 GEX 為負 ({total_gex:.2f} M)！市場極度脆弱，切勿隨便摸底。", "error"))
+                        # --- 1. 天花板減速機制 (不管正負 GEX 都監控) ---
+                        if max_call_wall > 0:
+                            dist_to_call_wall = abs(spot_price - max_call_wall) / spot_price
+                            if dist_to_call_wall <= ceiling_buffer_threshold:
+                                alerts.append(("⚠️ 天花板警示：股價逼近 Call Wall", f"距離 Call Wall (${max_call_wall:.2f}) 不到 2%！阻力極大，**多單請降低槓桿**，不建議在此加碼。", "warning"))
 
+                        # --- 2. GEX 核心判斷 ---
+                        if total_gex > 0:
+                            # 🟢 正 GEX 模式：穩健護盤
+                            alerts.append(("💡 策略：正 GEX 穩定護盤模式", f"目前 GEX 為正 ({total_gex:.2f} M)。大盤屬穩定陰漲，造市商會抑制波動，適合「高拋低吸」。", "success"))
+                            
+                            # **關鍵修正**：只有在 GEX > 0 且逼近 Put Wall 時才建議 Short Put
+                            if max_put_wall > 0 and abs(spot_price - max_put_wall) / spot_price <= near_wall_threshold:
+                                alerts.append(("💰 策略：正 GEX 低波收租 (Short Put)", f"股價逼近 Put Wall (${max_put_wall:.2f}) 且環境穩定。這是一個極佳的「賣出看跌期權 (Short Put)」時機，建議選擇 Put Wall 或再低一檔的履約價來賺取時間價值 (Theta)。", "info"))
+                        
+                        else:
+                            # 🔴 負 GEX 模式：狂暴避險
+                            alerts.append(("🚨 警告：負 GEX 狂暴模式", f"目前 GEX 為負 ({total_gex:.2f} M)！造市商會「助漲助跌」以對沖。市場極度脆落，嚴禁摸底做多或在此環境下 Short Put，以免發生閃崩風險。", "error"))
+                            
+                            if max_put_wall > 0 and abs(spot_price - max_put_wall) / spot_price <= near_wall_threshold:
+                                alerts.append(("⚠️ 警告：負 GEX 測試支撐", f"股價雖在 Put Wall (${max_put_wall:.2f}) 附近，但因負 GEX 影響，支撐隨時可能潰堤。請保持空手觀望。", "warning"))
+
+                        # --- 3. 多空分水嶺監控 ---
+                        if zero_gamma_level > 0 and abs(spot_price - zero_gamma_level) / spot_price <= near_wall_threshold:
+                            alerts.append(("⚡ 警戒：Zero Gamma 決戰點", f"股價正處於多空分水嶺 (${zero_gamma_level:.2f})。此處是造市商從「保護者」變「殺手」的切換點，請小心變盤。", "warning"))
+
+                    # --- 顯示網頁介面 (其餘部分不變) ---
                     if alerts:
                         st.markdown("### 🤖 策略雷達：自動進出場偵測")
                         for title, desc, atype in alerts:
