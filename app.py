@@ -388,3 +388,57 @@ if run_button:
                 except Exception as e:
                     st.error(f"計算 {ticker} 時發生錯誤: {e}")
 
+# --- 6. 主程式邏輯 ---
+if run_button:
+    tickers = [t.strip().upper() for t in ticker_input.split(",")]
+    summary_data = []  # 👈 1. 初始化總表清單
+    
+    # ... (中間大盤 SqueezeMetrics 代碼不變) ...
+
+    for ticker in tickers:
+        # ... (中間個股計算代碼不變) ...
+        try:
+            # [此處為您原本計算 total_gex, max_call_wall 等邏輯]
+            
+            # 👈 2. 在個股計算結束前，判定距離並收集資料
+            dist_call = abs(spot_price - max_call_wall) / spot_price if max_call_wall > 0 else 999
+            dist_put = abs(spot_price - max_put_wall) / spot_price if max_put_wall > 0 else 999
+            dist_zero = abs(spot_price - zero_gamma_level) / spot_price if zero_gamma_level > 0 else 999
+            
+            summary_data.append({
+                "代號": ticker,
+                "股價": round(spot_price, 2),
+                "GEX 狀態": "🟢 正" if total_gex > 0 else "🔴 負",
+                "Total GEX(M)": round(total_gex, 2),
+                "靠近 Call Wall": "⚠️ 靠近" if dist_call <= 0.02 else "---",
+                "靠近 Put Wall": "🛡️ 靠近" if dist_put <= 0.02 else "---",
+                "靠近 Zero Gamma": "⚡ 決戰點" if dist_zero <= 0.02 else "---",
+                "P/C Ratio": round(pcr, 2)
+            })
+            
+        except Exception as e:
+            continue
+
+    # 👈 3. 當所有個股跑完後，在網頁最下方顯示總結表格
+    st.markdown("---")
+    st.header("📊 全市場籌碼狀態總表 (快速掃描)")
+    
+    if summary_data:
+        summary_df = pd.DataFrame(summary_data)
+        
+        # 設定表格樣式：將正負 GEX 上色
+        def color_gex(val):
+            if val == "🟢 正": return 'color: #28a745; font-weight: bold'
+            if val == "🔴 負": return 'color: #dc3545; font-weight: bold'
+            return ''
+
+        styled_df = summary_df.style.applymap(color_gex, subset=['GEX 狀態'])
+        
+        st.dataframe(styled_df, use_container_width=True)
+        
+        # 額外小統計
+        pos_count = len(summary_df[summary_df["GEX 狀態"] == "🟢 正"])
+        neg_count = len(summary_df[summary_df["GEX 狀態"] == "🔴 負"])
+        st.caption(f"📈 統計結果：目前監測的標位中，{pos_count} 支處於正 GEX 區，{neg_count} 支處於負 GEX 區。")
+    else:
+        st.warning("沒有可顯示的總表數據。")
