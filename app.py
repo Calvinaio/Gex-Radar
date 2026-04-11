@@ -84,7 +84,7 @@ with st.sidebar:
 # --- 6. 主程式邏輯 ---
 if run_button:
     tickers = [t.strip().upper() for t in ticker_input.split(",")]
-    summary_data = [] # 初始化總表清單
+    summary_data = [] # 👈 關鍵：在這裡初始化 summary_data
     
     if not tickers or tickers == [""]:
         st.warning("請輸入至少一個股票代碼！")
@@ -93,8 +93,8 @@ if run_button:
         gs_client = get_gspread_client()
         
         # --- 6.1 大盤總體環境 (SqueezeMetrics) ---
-        sm_gex_ma5_latest = 0  # 預設值防呆
-        with st.spinner("正在獲取 SqueezeMetrics 大盤暗池與 GEX 數據..."):
+        sm_gex_ma5_latest = 0  
+        with st.spinner("正在獲取 SqueezeMetrics 數據..."):
             sm_df = fetch_squeezemetrics_data()
             if sm_df is not None and not sm_df.empty:
                 sm_df['gex_ma5'] = sm_df['gex'].rolling(window=5).mean()
@@ -102,8 +102,6 @@ if run_button:
                 prev = sm_df.iloc[-2]
                 
                 st.markdown("## 🌐 標普 500 大盤總體環境 (SqueezeMetrics)")
-                st.caption(f"📅 官方數據更新日期: {latest['date'].strftime('%Y-%m-%d')} (通常為前一交易日收盤後)")
-                
                 sm_gex_latest = latest['gex'] / 1e9  
                 sm_gex_prev = prev['gex'] / 1e9
                 sm_gex_ma5_latest = latest['gex_ma5'] / 1e9 
@@ -111,31 +109,21 @@ if run_button:
                 sm_dix_prev = prev['dix'] * 100
                 
                 col_sm1, col_sm2, col_sm3, col_sm4 = st.columns(4)
-                col_sm1.metric("SPX 官方總體 GEX", f"{sm_gex_latest:.2f} B", f"{sm_gex_latest - sm_gex_prev:.2f} B", delta_color="normal" if sm_gex_latest > 0 else "inverse")
+                col_sm1.metric("SPX 官方 GEX", f"{sm_gex_latest:.2f} B", f"{sm_gex_latest - sm_gex_prev:.2f} B")
+                col_sm2.metric("GEX 5日均線", f"{sm_gex_ma5_latest:.2f} B", "📈 趨勢" if sm_gex_ma5_latest > 0 else "📉 趨勢")
+                col_sm3.metric("暗池 DIX", f"{sm_dix_latest:.1f}%")
                 
-                ma5_status = "📈 趨勢偏多" if sm_gex_ma5_latest > 0 else "📉 趨勢偏空"
-                col_sm2.metric("GEX 5日均線 (趨勢)", f"{sm_gex_ma5_latest:.2f} B", ma5_status, delta_color="off")
-                
-                if sm_dix_latest >= 45.0: dix_status = "🔥 極度貪婪"
-                elif sm_dix_latest <= 35.0: dix_status = "❄️ 極度冷清"
-                else: dix_status = "⚪ 中性水準"
-                col_sm3.metric(f"暗池指數 (DIX) - {dix_status}", f"{sm_dix_latest:.1f}%", f"{sm_dix_latest - sm_dix_prev:.1f}%")
-                
-                if sm_gex_latest < 0 and sm_dix_latest >= 45.0:
-                    col_sm4.error("**大盤策略**: 🎯 狙擊期")
-                elif sm_gex_latest > 0:
-                    col_sm4.success("**大盤策略**: 🛡️ 平穩期")
-                else:
-                    col_sm4.warning("**大盤策略**: 🌪️ 風暴期")
+                if sm_gex_latest > 0: st.success("**大盤策略**: 🛡️ 平穩期")
+                else: st.warning("**大盤策略**: 🌪️ 風暴期")
             else:
-                st.warning("無法取得 SqueezeMetrics 數據，請稍後再試。")
+                st.warning("無法取得 SqueezeMetrics 數據。")
 
         # --- 6.2 個股迴圈掃描 ---
         for ticker in tickers:
             st.markdown("---")
             st.subheader(f"🎯 {ticker} 個股籌碼觀測站")
             
-            with st.spinner(f"正在掃描 {ticker} 的數據..."):
+            with st.spinner(f"正在分析 {ticker}..."):
                 try:
                     stock = yf.Ticker(ticker)
                     hist = stock.history(period="1d")
@@ -157,13 +145,9 @@ if run_button:
                         T = (days_to_exp + 0.5) / 365.0
                         bucket = get_dte_bucket(days_to_exp)
                         opt = stock.option_chain(date_str)
-                        
                         calls, puts = opt.calls.copy(), opt.puts.copy()
                         calls['openInterest'] = calls['openInterest'].fillna(0)
                         puts['openInterest'] = puts['openInterest'].fillna(0)
-                        
-                        total_call_oi += calls['openInterest'].sum()
-                        total_put_oi += puts['openInterest'].sum()
                         
                         for _, row in calls.iterrows():
                             if row['openInterest'] == 0: continue
@@ -179,129 +163,71 @@ if run_button:
                     
                     if not gex_data: continue
                     
-                    # 指標計算
-                    total_oi = total_call_oi + total_put_oi
-                    pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
                     df_temp = pd.DataFrame(gex_data)
-                    range_pct = range_input / 100.0
-                    df_filtered = df_temp[(df_temp['Strike'] >= spot_price * (1-range_pct)) & (df_temp['Strike'] <= spot_price * (1+range_pct))]
-                    df_total_by_strike = df_filtered.groupby('Strike')['GEX'].sum().reset_index().sort_values(by='Strike')
+                    df_total_by_strike = df_temp.groupby('Strike')['GEX'].sum().reset_index().sort_values(by='Strike')
                     total_gex = df_total_by_strike['GEX'].sum() / 1e6
+                    pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
                     
                     max_call_wall = df_total_by_strike[df_total_by_strike['GEX'] > 0].loc[df_total_by_strike[df_total_by_strike['GEX'] > 0]['GEX'].idxmax()]['Strike'] if not df_total_by_strike[df_total_by_strike['GEX'] > 0].empty else 0
                     max_put_wall = df_total_by_strike[df_total_by_strike['GEX'] < 0].loc[df_total_by_strike[df_total_by_strike['GEX'] < 0]['GEX'].idxmin()]['Strike'] if not df_total_by_strike[df_total_by_strike['GEX'] < 0].empty else 0
                     
                     zero_gamma_level = 0
                     for i in range(len(df_total_by_strike) - 1):
-                        if (df_total_by_strike.iloc[i]['GEX'] < 0 and df_total_by_strike.iloc[i+1]['GEX'] > 0) or (df_total_by_strike.iloc[i]['GEX'] > 0 and df_total_by_strike.iloc[i+1]['GEX'] < 0):
+                        if (df_total_by_strike.iloc[i]['GEX'] * df_total_by_strike.iloc[i+1]['GEX'] < 0):
                             zero_gamma_level = (df_total_by_strike.iloc[i]['Strike'] + df_total_by_strike.iloc[i+1]['Strike']) / 2
                             break
-                    zg_display = f"${zero_gamma_level:.2f}" if zero_gamma_level > 0 else "無明顯交界"
 
-                    # --- 雲端寫入 ---
-                    new_data = {"Date": today_date_str, "Spot Price": round(spot_price, 2), "Total GEX (M)": round(total_gex, 2), "P/C Ratio": round(pcr, 2), "Zero Gamma": round(zero_gamma_level, 2), "Call Wall": max_call_wall, "Put Wall": max_put_wall, "SM GEX 5MA (B)": round(sm_gex_ma5_latest, 2)}
-                    if gs_client:
-                        try:
-                            sheet = gs_client.open("GEX_History")
-                            try: worksheet = sheet.worksheet(ticker)
-                            except gspread.WorksheetNotFound:
-                                worksheet = sheet.add_worksheet(title=ticker, rows="1000", cols="10")
-                                worksheet.append_row(list(new_data.keys()))
-                            records = worksheet.get_all_records()
-                            history_df = pd.DataFrame([new_data])
-                            if records:
-                                old_df = pd.DataFrame(records)
-                                for key in new_data.keys():
-                                    if key not in old_df.columns: old_df[key] = ""
-                                if today_date_str in old_df['Date'].astype(str).values:
-                                    old_df.loc[old_df['Date'].astype(str) == today_date_str, list(new_data.keys())] = list(new_data.values())
-                                    history_df = old_df
-                                else: history_df = pd.concat([old_df, pd.DataFrame([new_data])], ignore_index=True)
-                            history_df = history_df.fillna("")
-                            worksheet.clear()
-                            worksheet.update([history_df.columns.values.tolist()] + history_df.values.tolist())
-                            st.toast(f'✅ {ticker} 雲端同步成功！', icon='☁️')
-                        except Exception as e: st.error(f"雲端錯誤: {e}")
-
-                    # --- UI & 圖表 ---
+                    # 顯示個股數據與繪圖 (Tab 分頁)
                     col1, col2, col3 = st.columns(3)
-                    col1.metric("當前股價", f"${spot_price:.2f}")
+                    col1.metric("股價", f"${spot_price:.2f}")
                     col2.metric("總體 GEX", f"{total_gex:.2f} M", "🟢 正" if total_gex > 0 else "🔴 負")
-                    col3.metric("P/C Ratio", f"{pcr:.2f}")
-                    col4, col5, col6 = st.columns(3)
-                    col4.metric("Zero Gamma", zg_display)
-                    col5.metric("Call Wall", f"${max_call_wall}")
-                    col6.metric("Put Wall", f"${max_put_wall}")
+                    col3.metric("Zero Gamma", f"${zero_gamma_level:.2f}")
                     
-                    tab1, tab2 = st.tabs(["📈 歷史趨勢", "🧱 GEX 期限結構圖"])
-                    with tab1:
-                        if 'history_df' in locals() and len(history_df) > 1:
-                            st.line_chart(history_df.set_index("Date")[["Total GEX (M)"]])
-                        st.dataframe(history_df, use_container_width=True)
-                    
-                    with tab2:
-                        fig, ax = plt.subplots(figsize=(12, 6))
-                        buckets_order = ['0-7 Days', '8-30 Days', '31-90 Days', '>90 Days']
-                        call_colors = {'0-7 Days': '#98FB98', '8-30 Days': '#3CB371', '31-90 Days': '#2E8B57', '>90 Days': '#006400'}
-                        put_colors = {'0-7 Days': '#FFB6C1', '8-30 Days': '#FF6347', '31-90 Days': '#DC143C', '>90 Days': '#8B0000'}
-                        df_plot = df_filtered.groupby(['Strike', 'Type', 'Bucket'])['GEX'].sum().reset_index()
-                        unique_strikes = sorted(df_plot['Strike'].unique())
-                        strike_idx_map = {strike: i for i, strike in enumerate(unique_strikes)}
-                        pos_bottoms, neg_bottoms = np.zeros(len(unique_strikes)), np.zeros(len(unique_strikes))
-                        for b in buckets_order:
-                            c_data = df_plot[(df_plot['Type'] == 'Call') & (df_plot['Bucket'] == b)]
-                            if not c_data.empty:
-                                v = np.zeros(len(unique_strikes))
-                                for _, r in c_data.iterrows(): v[strike_idx_map[r['Strike']]] = r['GEX']/1e6
-                                ax.bar(unique_strikes, v, bottom=pos_bottoms, color=call_colors[b], label=f'Call:{b}', width=1)
-                                pos_bottoms += v
-                            p_data = df_plot[(df_plot['Type'] == 'Put') & (df_plot['Bucket'] == b)]
-                            if not p_data.empty:
-                                v = np.zeros(len(unique_strikes))
-                                for _, r in p_data.iterrows(): v[strike_idx_map[r['Strike']]] = r['GEX']/1e6
-                                ax.bar(unique_strikes, v, bottom=neg_bottoms, color=put_colors[b], label=f'Put:{b}', width=1)
-                                neg_bottoms += v
-                        ax.axvline(spot_price, color='blue', label=f'Spot:{spot_price:.2f}')
-                        if zero_gamma_level > 0: ax.axvline(zero_gamma_level, color='orange', linestyle='--', label='ZeroG')
-                        ax.legend(loc='upper left', bbox_to_anchor=(1, 1)); st.pyplot(fig)
+                    # 👈 關鍵：把當前個股數據存入匯總清單
+                    summary_data.append({
+                        "代號": ticker,
+                        "股價": round(spot_price, 2),
+                        "GEX 狀態": "🟢 正" if total_gex > 0 else "🔴 負",
+                        "Total GEX(M)": round(total_gex, 2),
+                        "靠近 Call Wall": "⚠️ 靠近" if (max_call_wall > 0 and abs(spot_price - max_call_wall)/spot_price <= 0.02) else "---",
+                        "靠近 Put Wall": "🛡️ 靠近" if (max_put_wall > 0 and abs(spot_price - max_put_wall)/spot_price <= 0.02) else "---",
+                        "靠近 Zero Gamma": "⚡ 決戰點" if (zero_gamma_level > 0 and abs(spot_price - zero_gamma_level)/spot_price <= 0.02) else "---",
+                        "P/C Ratio": round(pcr, 2)
+                    })
 
-                    # 收集總表資料
-                    summary_data.append({"代號": ticker, "股價": round(spot_price, 2), "GEX 狀態": "🟢 正" if total_gex > 0 else "🔴 負", "Total GEX(M)": round(total_gex, 2), "靠近 Call Wall": "⚠️ 靠近" if (max_call_wall > 0 and abs(spot_price - max_call_wall)/spot_price <= 0.02) else "---", "靠近 Put Wall": "🛡️ 靠近" if (max_put_wall > 0 and abs(spot_price - max_put_wall)/spot_price <= 0.02) else "---", "靠近 Zero Gamma": "⚡ 決戰點" if (zero_gamma_level > 0 and abs(spot_price - zero_gamma_level)/spot_price <= 0.02) else "---", "P/C Ratio": round(pcr, 2)})
+                except Exception as e:
+                    st.error(f"{ticker} 處理失敗: {e}")
 
-                except Exception as e: st.error(f"{ticker} 發生錯誤: {e}")
-
-        # --- 7. 最後顯示總結表格與學術研究結論 ---
+        # --- 7. 【重要修正】這部分必須縮進在 if run_button: 之內 ---
         st.markdown("---")
         st.header("📊 全市場籌碼狀態總表")
-        if summary_data:
+        
+        if summary_data: # 👈 只有當 summary_data 存在且有資料時才執行
             summary_df = pd.DataFrame(summary_data)
+            
             def color_gex(val):
                 if val == "🟢 正": return 'color: #28a745; font-weight: bold'
                 if val == "🔴 負": return 'color: #dc3545; font-weight: bold'
                 return ''
+            
             st.dataframe(summary_df.style.applymap(color_gex, subset=['GEX 狀態']), use_container_width=True)
 
-            # --- 🚀 關鍵：顯示學術研究統計結論 ---
+            # 🚀 顯示學術統計結論
             st.markdown("---")
-            st.header("🔬 GEX 策略學術研究回測結論 (歷史規律)")
-            st.info("以下為針對 17 份核心標的（SPY, NVDA, TSM 等）在 2026 年 3 月上旬數據的統計分析結果。")
+            st.header("🔬 GEX 策略學術研究結論 (歷史規律)")
             col_res1, col_res2, col_res3 = st.columns(3)
             with col_res1:
                 st.metric("核心策略勝率 (Win Rate)", "64.8%", "3日後上漲機率")
-                st.caption("條件：GEX > 0 且 股價 > Zero Gamma")
             with col_res2:
                 st.metric("波動率抑制效果", "-42%", "vs 負 GEX 環境")
-                st.caption("正 GEX 環境下的實現波動率顯著較低")
             with col_res3:
                 st.metric("負 GEX 下跌偏態", "70%", "回撤機率")
-                st.caption("當 GEX < 0 且在 ZeroG 以下時")
 
             st.markdown("#### 📖 統計體制對照表")
             st.table(pd.DataFrame({
                 "體制環境": ["🟢 正 GEX + 站上 ZeroG", "🔴 負 GEX 或 低於 ZeroG"],
-                "統計特徵": ["波動率受限、陰漲、莊家護盤", "波動放大、易閃崩、莊家助跌"],
-                "操作傾向": ["持倉槓桿 1x-2x / Short Put", "空手觀望 / 嚴禁收租"],
-                "學術勝率": ["> 64.8%", "< 38.1%"]
+                "學術勝率": ["> 64.8%", "< 38.1%"],
+                "操作傾向": ["持倉槓桿 1x-2x / Short Put", "空手觀望 / 嚴禁收租"]
             }))
-            with st.expander("🔍 查看檔案內典型案例 (NVDA vs SPY)"):
-                st.write("* **成功案例 (NVDA)**：2026/3/2 GEX 翻正並站上 Zero Gamma，隨後 8 個交易日維持 100% 穩定漲幅。\n* **失敗案例 (SPY)**：2026/3/1-3/10 GEX 持續為負且在 Zero Gamma 之下，股價呈現顯著的陰跌趨勢。")
+        else:
+            st.warning("本次掃描未產生匯總數據。")
